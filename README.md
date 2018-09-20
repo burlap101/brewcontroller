@@ -1,2 +1,2 @@
 # brewcontroller
-My resposiytory for my brewery controller
+My respository for my brewery controller
