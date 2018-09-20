@@ -1,0 +1,283 @@
+from tkinter import *
+import tkinter.ttk
+import tkinter.messagebox
+import tkinter.filedialog
+import time
+from datetime import datetime
+import pickle
+import brewbrains as bb
+import GUI
+
+class BoilBrains(bb.BrewBrains):
+
+    """
+    Brains specific to boil app
+    FUTURE: Make this a subclass of BrewBrains =
+    I want a tree of brain nodes then the GUI to access the required end node only... less imports
+    The idea is to have common shared methods within the BrewBrains class then all specific methods within their respective class
+    I would also only like the top node to ever handle multithreading and to only have access to GPIO modules
+    """
+
+    def __init__(self, initial_time = 30, gpo_count = 2):
+        self._start = 0.0
+        self._elapsedtime = 0.0
+        self._running = False
+        self._remaining_time = initial_time*60.0
+        self._initial_time = initial_time*60.0
+        self._additions = []
+        super(BoilBrains, self).__init__(gpo_count = gpo_count)
+
+    def init_time_set(self, time):
+        if not self._running:
+            self._initial_time = time
+            self._remaining_time = time
+
+    def init_time_get(self):
+        return self._initial_time
+
+    def timenum_get(self):
+        if self._running:
+            self._remaining_time = self._initial_time - (time.time() - self._start)
+        minutes = int(self._remaining_time/60)
+        seconds = int(self._remaining_time - minutes*60.0)
+        hseconds = int((self._remaining_time - minutes*60.0 - seconds)*100)
+        return (minutes, seconds, hseconds)
+
+    def run_status(self):
+        return self._running
+
+    def start(self):
+        if not self._running:
+            self._start = time.time() - (self._initial_time - self._remaining_time)
+            self._running = True
+
+    def stop(self):
+        if self._running:
+            self._running = False
+
+    def reset(self):
+        if not self._running:
+            self._remaining_time = self._initial_time
+
+    def additions_set(self, additions):
+        if all(additions[i] >= additions [i+1] for i in range(len(additions)-1)):
+            self._additions = additions
+        else:
+            self._additions = []
+        
+
+    def additions_get(self):
+        return self._additions
+    
+    
+
+class BoilGUI(GUI.GUI):
+    """
+    GUI class for boil control
+    FUTURE: make this a subclass of GUI. 
+    """
+
+    refresh_time = 150
+    boil_time = 30   #time in minutes for boil
+    gpo_count = 2
+    addition_times = []
+
+    def __init__(self,root):
+        self.root = root
+        self.boilb = BoilBrains(initial_time = self.boil_time, gpo_count = self.gpo_count)
+        super(BoilGUI, self).__init__(self.root, brain = self.boilb)
+        #print self.boilb.get_sensors()
+
+    def create_menu(self):
+        menubar = Menu(self.root)
+        filemenu = Menu(menubar, tearoff = 0)
+        filemenu.add_command(label="Exit", command = self.exit_app)
+        menubar.add_cascade(label="File", menu=filemenu)
+        
+        optionsmenu = Menu(menubar, tearoff = 0)
+        optionsmenu.add_command(label = "Boil Time", command = self.view_boil_time)
+        optionsmenu.add_command(label = "Additions", command = self.view_additions)
+        optionsmenu.add_command(label = "Logging", command = self.view_logging_config)
+        
+        menubar.add_cascade(label = "Options", menu = optionsmenu)
+        aboutmenu = Menu(menubar, tearoff=0)
+        aboutmenu.add_command(label="About", command=self.about)
+        menubar.add_cascade(label="About", menu=aboutmenu)
+        self.root.config(menu = menubar)
+
+    def draw_timer_display(self):
+        bg = 'grey33'
+        fg = 'green'
+        timerframe = Frame(self.root, bg = bg)
+        timerframe.pack(side = LEFT, anchor = 'nw')
+        buttonframe = Frame(timerframe, bg = bg)
+        buttonframe.pack(side = RIGHT, anchor = 'nw', padx = 2, pady = 2)
+        Button(buttonframe, text = 'Stop', command = self.boilb.stop, width = 5).grid(column = 0, row = 1, sticky = 'w', padx = 2, pady = 2)
+        Button(buttonframe, text = 'Start', command = self.boilb.start, width = 5).grid(column = 0, row = 0, sticky = 'w', padx = 2, pady = 2)
+        Button(buttonframe, text = 'Reset', command = self.boilb.reset, width = 5).grid(column = 0, row = 2, sticky = 'w', padx = 2, pady = 2)
+                
+        self.timerlabel = Label(timerframe, text = "%02d:00:00" %self.boil_time, bg = 'grey11', fg = fg, relief = "sunken", font = "Helvetica 65")
+        self.timerlabel.pack(side = TOP, padx = 2, pady = 2)
+    
+    def view_additions(self):
+
+        self.addition_win = Toplevel(self.root)
+        self.addition_win.title("Additions")
+       
+        Label(self.addition_win, text = "No. of Additions: ").grid(row = 1, column = 0, sticky = 'w', pady = 2, padx = 2)
+        additions_entry = Entry(self.addition_win, width = 5)
+        additions_entry.grid(row = 1, column = 1, sticky = 'e', pady = 2, padx = 2)
+        additions_entry.insert(0, len(self.boilb.additions_get()))
+        Button(self.addition_win, text = "Update", command = lambda: self.update_addition_entries(additions_entry.get())).grid(row = 2, column = 0, sticky = 'e', pady = 2, padx = 2)
+        
+        entries = []
+        additions = self.boilb.additions_get()
+        for i in range(len(additions)):
+            Label(self.addition_win, text = "#%d Addition (minutes): " %(i+1)).grid(row = 3+i, column = 0, sticky = 'w', padx = 2, pady = 2)
+            entries.append(Entry(self.addition_win, width = 5))
+            entries[i].grid(row = 3+i, column = 1, sticky = 'e', pady = 2, padx = 2)
+            entries[i].insert(0, additions[i]/60)                           
+
+    def update_addition_entries(self, additions = 0):
+        max_additions = 10
+        addition_times = self.boilb.additions_get()
+        
+        if int(additions) <= max_additions:
+            try:
+                entries = []
+                for i in range(int(additions)):
+                    Label(self.addition_win, text = "#%d Addition (minutes): " %(i+1)).grid(row = 3+i, column = 0, sticky = 'w', padx = 2, pady = 2)
+                    entries.append(Entry(self.addition_win, width = 5))
+                    entries[i].grid(row = 3+i, column = 1, sticky = 'e', pady = 2, padx = 2)
+                    if i<len(addition_times):
+                        entries[i].insert(0, addition_times[i]/60)
+            except(ValueError):
+                tkinter.messagebox.showerror(title = "Value Error", message = "Invalid value entered")
+                self.addition_win.destroy()
+        else:
+            tkinter.messagebox.showerror(message = "Maximum amount of additions is 10", title = "Additions exceeded")
+
+        def assign_addition_times():
+
+            new_additions = []
+            for i in range(int(additions)):
+                new_additions.append(float(entries[i].get()))
+                
+            self.boilb.additions_set([x*60.0 for x in new_additions])
+            
+            print(self.boilb.additions_get())
+            if not self.boilb.additions_get():
+                tkinter.messagebox.showerror(title = "Not monotonically decreasing...",
+                                       message = ("Additions must be entered in descending order"
+                                                  " with first addition being the time remaining"
+                                                  " of the boil"))
+                for i in entries:
+                    i.delete(first = 0)
+            else:
+                self.addition_win.destroy()
+            
+        if int(additions) > 0 and int(additions) <= max_additions:
+            Button(self.addition_win, text = "Commit Additions",
+                   command = assign_addition_times).grid(row = 4+ int(additions), column = 0, sticky = 'e', pady = 2, padx = 2)
+        
+    
+    def view_boil_time(self):
+        boil_time_win = Toplevel(self.root)
+        boil_time_win.title("Boil Time")
+        Label(boil_time_win, text = "Boil Time (minutes): ").grid(row = 0, column = 0, sticky = 'w', pady = 2, padx = 2)
+        boil_time_entry = Entry(boil_time_win, width = 5)
+        boil_time_entry.grid(row = 0, column = 1, sticky = 'e', pady = 2, padx = 2)
+        boil_time_entry.insert(0, "%.1f" %(self.boilb.init_time_get()/60))
+        Button(boil_time_win, text = "Update", command = lambda: update_boil_time(boil_time_entry.get())).grid(row = 1, column = 0, sticky = 'e', pady = 2, padx = 2)
+
+        def update_boil_time(boil_time):
+
+            if self.boilb.run_status():
+                tkinter.messagebox.showerror(title = "Timer Running",
+                                       message = "Cannot reset boil time while a boil is actively running")
+                
+            else:
+                self.boilb.init_time_set(float(boil_time)*60)
+                self.boil_time = float(boil_time)
+                self.timerlabel.configure(text = "%02d:00:00" %self.boil_time)
+
+            boil_time_win.destroy()
+
+    def view_logging_config(self):
+        logging_win = Toplevel(self.root)
+        logging_win.title("Logging Configuration")
+        Label(logging_win, text = "Log filename: ").grid(row = 0, column = 0, sticky = 'w', pady = 2, padx = 2)
+        logfile_entry = Entry(logging_win, width = 50)
+        logfile_entry.grid(row = 0, column = 1, sticky = 'e', pady = 2, padx = 2)
+        logfile = self.boilb.get_logfile()
+        if logfile:
+            logfile_entry.insert(0, self.boilb.get_logfile())
+
+        def set_logfile():
+            
+            if logfile_entry.get() and tkinter.messagebox.askyesno(title = "File already entered",
+                                                 message = "Do you really want to select a different logfile?"):
+                new_logfile = tkinter.filedialog.askopenfilename()
+                logfile_entry.delete(0, END)
+                logfile_entry.insert(0, new_logfile)
+            elif not logfile:
+                new_logfile = tkinter.filedialog.askopenfilename()
+                logfile_entry.insert(0, new_logfile)
+            else:
+                print("Shouldn't be here")
+            
+                
+        Button(logging_win, text = "Browse",
+               command = set_logfile).grid(row = 0, column = 2, padx = 2, pady = 2)
+
+
+    def update(self):
+        for sensor in self.boilb.get_sensors():
+            try:
+                temp_c = self.boilb.get_temp(sensor) 
+                self.templabel[sensor].config(text="%.2f degC" %temp_c)
+            except:
+                self.templabel[sensor].config(text="#### degC")
+                
+        for gpo in range(self.gpo_count):
+            self.change_gpo_status_label(gpo)
+                
+        
+        time_remaining = self.boilb.timenum_get()
+        self.timerlabel.config(text = "%02d:%02d:%02d" % time_remaining)
+        if sum(time_remaining) <= 0:
+            self.boilb.stop()
+            self.timerlabel.config(text = "00:00:00")
+
+        additions = self.boilb.additions_get()
+        tr_num = (time_remaining[0]*60.0) + time_remaining[1] + (time_remaining[2]/100)
+        
+        if additions and tr_num <= additions[0]:
+            tkinter.messagebox.showinfo(title = "Addition Time",
+                                  message = ("Please add the next addition"))
+            additions.reverse()
+            additions.pop()
+            additions.reverse()
+            self.boilb.additions_set(additions)
+
+        self.root.after(self.refresh_time, self.update)
+        
+    def about(self):
+        message = ("Use this application for monitoring boil time and additions."
+                   )
+        tkinter.messagebox.showinfo(title = "Temperature Control App", message = message)
+
+def main():
+    root = Tk()
+    root.title("Boil Kettle Control")
+    gui = BoilGUI(root)
+    gui.create_menu()
+    gui.draw_setpoint_display(bg = 'light blue', packside = 'bottom')
+    gui.draw_iostatus_display()
+    gui.draw_timer_display()
+    #gui.draw_infobar()
+    root.after(500, gui.update)
+    root.mainloop()
+
+if __name__ == '__main__':
+    main()
